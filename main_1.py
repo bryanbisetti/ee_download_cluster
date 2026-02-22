@@ -7,8 +7,8 @@ df_flaring = pd.read_csv('df_flaring.csv')
 
 # Start the download process
 download_in_parallel(
-    df_flaring.iloc[:500],
-    batch_size=50,
-    max_workers=50, # The cluster can handle high concurrency
+    df_flaring.iloc[:300],
+    batch_size=30,
+    max_workers=30, # The cluster can handle high concurrency
     period="W"
 )
