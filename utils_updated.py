@@ -1313,7 +1313,7 @@ def download_in_parallel_urls(
     - Batches are processed sequentially to avoid overwhelming APIs / rate limits.
     - Returns a list of results: dicts with keys: location, ok, error (optional).
     """
-    init_ee(project="peppy-center-488409-p3") #stable-healer-488213-f9 #ee-brybisetti-cluster #tesi-isa-1 #peppy-center-488409-p3
+    init_ee(project="hardy-unison-487923-t0") #hardy-unison-487923-t0 #stable-healer-488213-f9 #ee-brybisetti-cluster #tesi-isa-1 #peppy-center-488409-p3
 
     results = []
     n = len(df_flaring)
@@ -1357,7 +1357,7 @@ def download_in_parallel_images(
     - Batches are processed sequentially to avoid overwhelming APIs / rate limits.
     - Returns a list of results: dicts with keys: location, ok, error (optional).
     """
-    init_ee(project="peppy-center-488409-p3") #stable-healer-488213-f9 #ee-brybisetti-cluster #tesi-isa-1 #peppy-center-488409-p3
+    init_ee(project="hardy-unison-487923-t0") #hardy-unison-487923-t0 #stable-healer-488213-f9 #ee-brybisetti-cluster #tesi-isa-1 #peppy-center-488409-p3
 
     results = []
     n = len(df_flaring)
