@@ -156,7 +156,104 @@ def robust_percentile(x, q):
 def download_url(location, lon, lat, start_date, end_date, period: str = "M", k_per_period: int = 3,
              radius_m: int = 1000, max_cloud_pct: int = 100, collect: str = "L1C", sleep_s: float = 0.5):
     
-    init_ee(project="hardy-unison-487923-t0") # old project 'gen-lang-client-0273914738'
+    # print('---------------------------------------------------------------------------------------------------------------------------------------------------')
+    # print(f'Starting Download! Plant name: {location} | Coordinates: {lon}, {lat} | Date range: from {start_date} to {end_date}')
+    # print('---------------------------------------------------------------------------------------------------------------------------------------------------')
+
+    # ---- tunable parameters ----
+        # ---- tunable parameters ----
+    # (you can override these via function args)
+    radius_m = int(radius_m)        # AOI buffer radius
+    k_per_period = int(k_per_period)  # how many scenes per period (month/week)
+    max_cloud_pct = float(max_cloud_pct)  # 100 = take everything; no masking
+    collect = str(collect)              # 'L1C' (TOA) or 'SR' (surface reflectance)
+
+    pt  = ee.Geometry.Point([lon, lat])
+    aoi = pt.buffer(radius_m)
+
+    # choose S2 collection (no masking)
+    if collect == 'L1C':
+        s2 = (ee.ImageCollection('COPERNICUS/S2')
+            .filterBounds(aoi)
+            .filterDate(start_date, end_date)
+            .filter(ee.Filter.lte('CLOUDY_PIXEL_PERCENTAGE', max_cloud_pct)))
+    else:
+        s2 = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+            .filterBounds(aoi)
+            .filterDate(start_date, end_date)
+            .filter(ee.Filter.lte('CLOUDY_PIXEL_PERCENTAGE', max_cloud_pct)))
+        
+    periods = period_starts(start_date, end_date, period=period)
+
+    print(f'------- Starting URLs downloads for plant {location}! -------')
+    rows = []
+    for count, ps in enumerate(periods):
+        ps = _to_date(ps)
+        pe = period_end(ps, period=period)
+        # overall end date (convert "YYYY-MM" to end-of-month if monthly)
+        d1 = pd.to_datetime(end_date).date()
+        if period == "M":
+            # if your end_date is stored as month start (YYYY-MM-01), include the whole month
+            d1 = (pd.Timestamp(d1) + pd.offsets.MonthEnd(0)).date()
+        # clamp
+        if pe > d1:
+            pe = d1
+        # guard: skip invalid/empty ranges
+        if pe <= ps:
+            continue
+
+        ee_end = pe + timedelta(days=1)
+        col_m = (s2.filterDate(ps.isoformat(), ee_end.isoformat()).sort("CLOUDY_PIXEL_PERCENTAGE"))
+
+        n = int(col_m.size().getInfo())
+        if n == 0:
+            print(f'No images fount for plant {location} for period {ps} - {pe} -> ({count}/{len(periods)})')
+            continue
+        print(f'Number of images fount for plant {location} for period {ps} - {pe} : {n} images -> ({count}/{len(periods)})')
+
+        k = min(k_per_period, n)
+        lst = col_m.toList(n)
+        for i in range(k):
+            img = ee.Image(lst.get(i))
+            date_str = ee.Date(img.get('system:time_start')).format('YYYY-MM-dd').getInfo()
+            tag = period_tag(ps, period=period)
+            cloud = img.get('CLOUDY_PIXEL_PERCENTAGE').getInfo()
+            base = f"S2_{collect}_{tag}_{date_str.replace('-','')}"
+
+            rgb = png_url(img, ['B4','B3','B2'], 10, base+'_RGB_10m', aoi)
+            swr = png_url(img, ['B12','B11','B8A'], 20, base+'_SWIR_20m', aoi)
+            tif = geotiff_url(img, ['B2','B3','B4','B8','B8A','B11','B12'], 20, base+'_RAW_20m', aoi)
+            cir  = png_url(img, ['B8','B4','B3'], 10, base+'_CIR_10m', aoi)       # NIR/Red/Green
+            b11  = png_url(img, ['B11'], 20, base+'_B11_20m', aoi)
+            b12  = png_url(img, ['B12'], 20, base+'_B12_20m', aoi)
+
+            rows.append({
+                'period': tag,
+                'date': date_str,
+                'cloudy_pct': cloud,
+                'rgb_png': rgb,
+                'swir_png': swr,
+                'raw_tiff': tif,
+                'cir_png': cir,
+                'b11': b11,
+                'b12': b12
+            })
+    print(rows)
+
+    save_dir = f"s2_downloads_{period}/{location}/"
+    os.makedirs(save_dir, exist_ok=True)
+    out_csv_urls = os.path.join(save_dir, "urls.csv")
+    df_url = pd.DataFrame(rows).sort_values(['period','date']).reset_index(drop=True)
+    df_url.to_csv(out_csv_urls)
+    print(f'------- URLs download finished for plant {location}! -------')
+    print(f"------- URLs info for plant {location} --> Total rows: {len(df_url)} | Total S2 scenes in window: {s2.size().getInfo()} -------")
+
+
+
+def download_url_1(location, lon, lat, start_date, end_date, period: str = "M", k_per_period: int = 3,
+             radius_m: int = 1000, max_cloud_pct: int = 100, collect: str = "L1C", sleep_s: float = 0.5):
+    
+    # init_ee(project="stable-healer-488213-f9") # old project 'gen-lang-client-0273914738'
     # print('---------------------------------------------------------------------------------------------------------------------------------------------------')
     # print(f'Starting Download! Plant name: {location} | Coordinates: {lon}, {lat} | Date range: from {start_date} to {end_date}')
     # print('---------------------------------------------------------------------------------------------------------------------------------------------------')
@@ -249,6 +346,29 @@ def download_url(location, lon, lat, start_date, end_date, period: str = "M", k_
     print(f'------- URLs download finished for plant {location}! -------')
     print(f"------- URLs info for plant {location} --> Total rows: {len(df_url)} | Total S2 scenes in window: {s2.size().getInfo()} -------")
     
+    print(f'------- Starting Image Download for plant {location}! RGB, TIF, CIR, SWIR -------')
+    url_dir = f"s2_downloads_{period}/{location}/urls.csv"
+    save_dir = f"s2_downloads_{period}/{location}/"
+    
+    df_url = pd.read_csv(url_dir)
+    # Download RGB PNG and the raw GeoTIFF for each row (adjust as you like)
+    for i, row in df_url.iterrows():
+        print(f'Download images for plant {location}  -> ({i}/{len(df_url)})')
+        base = f"{row['period']}_{row['date'].replace('-','')}"
+        rgb_path = os.path.join(save_dir, base + "_RGB_10m.png")
+        tif_path = os.path.join(save_dir, base + "_RAW_20m.tif")
+        cir_path = os.path.join(save_dir, base + "_CIR_10m.tif")
+        swir_path = os.path.join(save_dir, base + "_SWIR_20m.tif")
+        grab(row["rgb_png"], rgb_path)
+        grab(row["raw_tiff"], tif_path)
+        grab(row["cir_png"], cir_path)
+        grab(row["swir_png"], swir_path)
+
+    print(f"Download done for plant {location}! Files in:", os.path.abspath(save_dir))
+
+ 
+    
+
 def download_images(period, location):
     print(f'------- Starting Image Download for plant {location}! RGB, TIF, CIR, SWIR -------')
     url_dir = f"s2_downloads_{period}/{location}/urls.csv"
@@ -270,88 +390,6 @@ def download_images(period, location):
 
     print(f"Download done for plant {location}! Files in:", os.path.abspath(save_dir))
 
-    # # ------- tunable params (lenient but safe defaults) -------
-    # VALID_DN       = 5      # B8A DN threshold for a pixel to be "valid"
-    # B8A_MIN_DN     = 10     # denominator guard for TAI
-    # TAI_HOT        = 0.30   # "hot" pixel threshold for TAI
-    # MIN_PCT_VALID  = 20.0   # minimum % valid coverage inside AOI
-    # MIN_HOT_PX     = 0      # allow 0; other heat cues must still pass
-    # USE_MEDIAN3    = True   # 3x3 median filter before counting hot_px
-
-    # # extra heat cues (fallbacks)
-    # P95_TAI_MIN    = 0.18   # accept if 95th percentile of TAI exceeds this
-    # P99_SW_MIN     = 4000   # accept if 99th percentile of SW (B11+B12) exceeds this (DN)
-
-    # print(f'------- Starting ACCEPTANCE calculation for plant {location}! -------')
-    # rows = []
-    # for path in sorted(glob.glob(os.path.join(save_dir, "*_RAW_20m.tif"))):
-    #     with rasterio.open(path) as ds:
-    #         # Band order exported: B2,B3,B4,B8,B8A,B11,B12  (1..7)
-    #         B8A = ds.read(5).astype(np.float32)
-    #         B11 = ds.read(6).astype(np.float32)
-    #         B12 = ds.read(7).astype(np.float32)
-
-    #         total_px   = np.isfinite(B11).sum()
-    #         valid_mask = B8A > VALID_DN
-    #         valid_px   = int(valid_mask.sum())
-    #         pct_valid  = 100.0 * valid_px / max(total_px, 1)
-
-    #         # ----- TAI with denominator guard -----
-    #         denom = np.where(B8A > B8A_MIN_DN, B8A, B8A_MIN_DN).astype(np.float32)
-    #         TAI   = (B12 - B11) / denom
-    #         TAI[~valid_mask] = np.nan
-    #         if USE_MEDIAN3:
-    #             TAI = median_filter(TAI, size=3)
-
-    #         # ----- SWIR brightness fallback (DN) -----
-    #         SW = (B11 + B12).astype(np.float32)
-    #         SW[~valid_mask] = np.nan
-
-    #         # ----- Stats -----
-    #         def robust_percentile(a, p):
-    #             a1 = a[np.isfinite(a)]
-    #             return np.nan if a1.size == 0 else float(np.nanpercentile(a1, p))
-
-    #         maxTAI  = float(np.nanmax(TAI)) if np.isfinite(TAI).any() else np.nan
-    #         p95_TAI = robust_percentile(TAI, 95)
-    #         p99_SW  = robust_percentile(SW, 99)
-    #         hot_px  = int(np.nansum(TAI > TAI_HOT))
-
-    #         # ----- Acceptance logic -----
-    #         ok_cover = (pct_valid >= MIN_PCT_VALID)
-    #         ok_heat  = (
-    #             (hot_px >= MIN_HOT_PX) or
-    #             (np.isfinite(maxTAI)  and maxTAI  >= TAI_HOT) or
-    #             (np.isfinite(p95_TAI) and p95_TAI >= P95_TAI_MIN) or
-    #             (np.isfinite(p99_SW)  and p99_SW  >= P99_SW_MIN)
-    #         )
-    #         accept = bool(ok_cover and ok_heat)
-
-    #         # ----- Heuristic score to rank scenes -----
-    #         score = (pct_valid/100.0) * (
-    #                     max(p95_TAI if np.isfinite(p95_TAI) else 0.0, 0.0)
-    #                 ) + max(hot_px, 0)/50.0 \
-    #                 + (0.2 if (np.isfinite(p99_SW) and p99_SW >= P99_SW_MIN) else 0.0)
-
-    #         rows.append({
-    #             "file": os.path.basename(path),
-    #             "pct_valid": round(pct_valid, 1),
-    #             "maxTAI": round(maxTAI, 3) if np.isfinite(maxTAI) else np.nan,
-    #             "p95_TAI": round(p95_TAI, 3) if np.isfinite(p95_TAI) else np.nan,
-    #             "p99_SW": round(p99_SW, 1) if np.isfinite(p99_SW) else np.nan,
-    #             "hot_px": hot_px,
-    #             "accept": accept,
-    #             "score": round(score, 3),
-    #         })
-
-    # print(f'------- Acceptance calcualtion finished for plant {location}! -------')
-
-    # df_acceptance = pd.DataFrame(rows).sort_values(["accept","score","pct_valid","maxTAI"], ascending=[False, False, False, False])
-
-    # out_csv_url = os.path.join(save_dir, "acceptance.csv")
-    # df_acceptance.to_csv(out_csv_url, index=False)
-
-    return df_url
 
 def make_thermal_palette():
     # Return a 256*3 list for a fire/thermal palette (black→purple→red→orange→yellow→white).
@@ -1294,11 +1332,12 @@ def validate_and_adjust(monthly_df: pd.DataFrame):
 
     return adj, mach_params, pd.Series(report)
 
-def download_in_parallel_urls(
+def download_in_parallel(
     df_flaring,
     batch_size: int = 20,
     max_workers: int = 20,
     period: str = "M",
+    project = 'stable-healer-488213-f9',
     *,
     location_col: str = "Plant name",
     lon_col: str = "Longitude",
@@ -1313,7 +1352,7 @@ def download_in_parallel_urls(
     - Batches are processed sequentially to avoid overwhelming APIs / rate limits.
     - Returns a list of results: dicts with keys: location, ok, error (optional).
     """
-    init_ee(project="hardy-unison-487923-t0") #hardy-unison-487923-t0 #stable-healer-488213-f9 #ee-brybisetti-cluster #tesi-isa-1 #peppy-center-488409-p3
+    init_ee(project = project)  #stable-healer-488213-f9 #ee-brybisetti-cluster #tesi-isa-1 #peppy-center-488409-p3  and cluster is running on #hardy-unison-487923-t0
 
     results = []
     n = len(df_flaring)
@@ -1331,7 +1370,7 @@ def download_in_parallel_urls(
                 lat = float(row[lat_col])
                 start_date = row[start_col]
                 end_date = row[end_col]
-                fut = ex.submit(download_url, location, lon, lat, start_date, end_date, period, **download_kwargs)
+                fut = ex.submit(download_url_1, location, lon, lat, start_date, end_date, period, **download_kwargs)
                 futs[fut] = location
 
             for fut in _cf.as_completed(futs):
@@ -1344,44 +1383,7 @@ def download_in_parallel_urls(
                     print(f"[ERROR] {location}: {e}")
 
     return results
-
-def download_in_parallel_images(
-    df_flaring,
-    batch_size: int = 20,
-    max_workers: int = 20,
-    period: str = "M",
-):
-    """Run `download(...)` concurrently, batch-by-batch.
-
-    - Concurrency is capped by `max_workers`.
-    - Batches are processed sequentially to avoid overwhelming APIs / rate limits.
-    - Returns a list of results: dicts with keys: location, ok, error (optional).
-    """
-    init_ee(project="hardy-unison-487923-t0") #hardy-unison-487923-t0 #stable-healer-488213-f9 #ee-brybisetti-cluster #tesi-isa-1 #peppy-center-488409-p3
-
-    results = []
-    n = len(df_flaring)
-    for b0 in range(0, n, batch_size):
-        b1 = min(b0 + batch_size, n)
-        batch = df_flaring.iloc[b0:b1]
-
-        print(f"=== Batch {b0//batch_size + 1} | rows {b0}..{b1-1} | period={period} | workers={max_workers} ===")
-
-        with _cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
-            futs = {}
-            for _, row in batch.iterrows():
-                location = row["Plant name"]
-                fut = ex.submit(download_images, period, location)
-                futs[fut] = location
-
-            for fut in _cf.as_completed(futs):
-                location = futs[fut]
-                try:
-                    fut.result()
-                    results.append({"location": location, "ok": True})
-                except Exception as e:
-                    results.append({"location": location, "ok": False, "error": repr(e)})
-                    print(f"[ERROR] {location}: {e}")
+    
 
 
 # ---------------------------------------------------------
@@ -1561,3 +1563,5 @@ def score_text_vader(x: str):
     compound = s["compound"]
     label = "pos" if compound >= 0.05 else ("neg" if compound <= -0.05 else "neu")
     return compound, label
+
+
