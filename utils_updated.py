@@ -1294,7 +1294,7 @@ def validate_and_adjust(monthly_df: pd.DataFrame):
 
     return adj, mach_params, pd.Series(report)
 
-def download_in_parallel(
+def download_in_parallel_urls(
     df_flaring,
     batch_size: int = 20,
     max_workers: int = 20,
@@ -1313,6 +1313,7 @@ def download_in_parallel(
     - Batches are processed sequentially to avoid overwhelming APIs / rate limits.
     - Returns a list of results: dicts with keys: location, ok, error (optional).
     """
+    init_ee(project="peppy-center-488409-p3") #stable-healer-488213-f9 #ee-brybisetti-cluster #tesi-isa-1 #peppy-center-488409-p3
 
     results = []
     n = len(df_flaring)
@@ -1343,6 +1344,45 @@ def download_in_parallel(
                     print(f"[ERROR] {location}: {e}")
 
     return results
+
+def download_in_parallel_images(
+    df_flaring,
+    batch_size: int = 20,
+    max_workers: int = 20,
+    period: str = "M",
+):
+    """Run `download(...)` concurrently, batch-by-batch.
+
+    - Concurrency is capped by `max_workers`.
+    - Batches are processed sequentially to avoid overwhelming APIs / rate limits.
+    - Returns a list of results: dicts with keys: location, ok, error (optional).
+    """
+    init_ee(project="peppy-center-488409-p3") #stable-healer-488213-f9 #ee-brybisetti-cluster #tesi-isa-1 #peppy-center-488409-p3
+
+    results = []
+    n = len(df_flaring)
+    for b0 in range(0, n, batch_size):
+        b1 = min(b0 + batch_size, n)
+        batch = df_flaring.iloc[b0:b1]
+
+        print(f"=== Batch {b0//batch_size + 1} | rows {b0}..{b1-1} | period={period} | workers={max_workers} ===")
+
+        with _cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futs = {}
+            for _, row in batch.iterrows():
+                location = row["Plant name"]
+                fut = ex.submit(download_images, period, location)
+                futs[fut] = location
+
+            for fut in _cf.as_completed(futs):
+                location = futs[fut]
+                try:
+                    fut.result()
+                    results.append({"location": location, "ok": True})
+                except Exception as e:
+                    results.append({"location": location, "ok": False, "error": repr(e)})
+                    print(f"[ERROR] {location}: {e}")
+
 
 # ---------------------------------------------------------
 # Helpers
