@@ -1448,28 +1448,14 @@ def fetch_one_keyword(
 # ---------------------------------------------------------
 # Main downloader (parallel keyword requests in batches)
 # ---------------------------------------------------------
-def download_csv(date: str, days_param: int):
+def download_csv(date, days_param: int):
     """
     date format must be: 'Aug 2022' (Mon YYYY)
     days_param = window size in days for each GDELT call window (e.g. 1, 3, 7)
     """
 
-    # --- parse "Aug 2022" into numeric month/year ---
-    try:
-        mon_str, yr_str = date.split()
-        month = datetime.datetime.strptime(mon_str, "%b").month
-        year  = int(yr_str)
-    except Exception:
-        raise ValueError(f"date must be 'Mon YYYY', got {date!r}")
-
-    # month boundaries
-    if month == 12:
-        next_month, next_year = 1, year + 1
-    else:
-        next_month, next_year = month + 1, year
-
-    period_start = datetime.datetime(year, month, 1, 0, 0)
-    period_end   = datetime.datetime(next_year, next_month, 1, 0, 0)
+    period_start = pd.Timestamp(date[0])
+    period_end = pd.Timestamp(date[1])
 
     print("----------------------------------------------------------")
     print(f"Period Start: {period_start.date()} --- Period End: {period_end.date()}")
@@ -1482,13 +1468,11 @@ def download_csv(date: str, days_param: int):
     MAXRECORDS  = 250
 
     # --- keywords (choose ONE) ---
-    # keywords = oil_keywords + geopolitics_keywords
-    # keywords = examples
-    keywords = examples
+    keywords = oil_keywords + geopolitics_keywords
 
     # parallel settings
-    KEYWORD_BATCH_SIZE = 20   # <= batches of 20 keywords
-    MAX_WORKERS = 20          # <= 20 concurrent requests (reduce if too many 429s)
+    KEYWORD_BATCH_SIZE = 20  # <= batches of 20 keywords
+    MAX_WORKERS = 20         # <= 20 concurrent requests (reduce if too many 429s)
 
     start_time = period_start
     combined_all = pd.DataFrame()
